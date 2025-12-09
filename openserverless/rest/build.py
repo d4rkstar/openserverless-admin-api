@@ -15,6 +15,7 @@
 # specific language governing permissions and limitations
 # under the License.
 #
+import os
 from openserverless import app
 from http import HTTPStatus
 from flask import request, Response
@@ -92,12 +93,14 @@ def build():
     auth_result = authorize()
     if isinstance(auth_result, Response):
       return auth_result
-    
+
     env = env_to_dict(auth_result)
     user_env = env_to_dict(auth_result,"userenv")
     for key in user_env:
         env[key]=user_env[key]
-    if env is None:
+
+    # Check if env is empty (env_to_dict returns dict, never None)
+    if not env:
         return res_builder.build_error_message("User environment not found", status_code=HTTPStatus.UNAUTHORIZED)
 
     if (request.json is None):
@@ -116,18 +119,24 @@ def build():
     wsk_user_name = auth_result.get('login','').lower()
     target = json_data.get('target')
     target_user = str(target).split(':')[0]
-    #if wsk_user_name != target_user:
-    #    return res_builder.build_error_message("Invalid target for the build.", status_code=HTTPStatus.BAD_REQUEST)
+
+    # Strict user check is enabled by default for security
+    strict_user_check = os.environ.get("STRICT_USER_CHECK", "true").lower() not in ("false", "0", "no", "off")
+    if strict_user_check and (wsk_user_name != target_user):
+        return res_builder.build_error_message("Invalid target for the build.", status_code=HTTPStatus.BAD_REQUEST)
 
     env['wsk_user_name'] = wsk_user_name
     build_service = BuildService(user_env=env)
     build_service.init(build_config=json_data)
-    build_success = build_service.build(json_data.get('target'))  # Replace with your desired image name
-    
-    if not build_success:
-        return res_builder.build_error_message("Build process failed.", status_code=HTTPStatus.INTERNAL_SERVER_ERROR)
-    
-    return res_builder.build_response_message("Build process initiated successfully.", status_code=HTTPStatus.OK)
+    success, msg = build_service.build(json_data.get('target')) 
+
+    if not success:
+      return res_builder.build_error_message(msg or "Build process failed.", status_code=HTTPStatus.INTERNAL_SERVER_ERROR)
+
+    additional_data = {"id": build_service.id, "job_name": build_service.job_name }
+    return res_builder.build_response_message(f"Build process initiated successfully. Job: {msg}", 
+                                              data=additional_data,
+                                              status_code=HTTPStatus.OK)
 
 @app.route('/system/api/v1/build/cleanup', methods=['POST'])    
 def clean():
@@ -204,9 +213,10 @@ def clean():
     auth_result = authorize()
     if isinstance(auth_result, Response):
       return auth_result
-    
+
     env = env_to_dict(auth_result)
-    if env is None:
+    # Check if env is empty (env_to_dict returns dict, never None)
+    if not env:
         return res_builder.build_error_message("User environment not found", status_code=HTTPStatus.UNAUTHORIZED)
     
     if (request.json is None):

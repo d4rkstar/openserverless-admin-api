@@ -19,36 +19,56 @@ from flask import jsonify, make_response
 
 
 def build_error_message(
-    message: str, status_code=400, headers={"Content-Type": "application/json"}
+    message: str, status_code=400, headers=None
 ):
+    if headers is None:
+        headers = {"Content-Type": "application/json"}
     return make_response(
         jsonify({"message": message, "status": "ko"}), status_code, headers
     )
 
 
 def build_response_message(
-    message: str, status_code=200, headers={"Content-Type": "application/json"}
+    message: str, data=None, status_code=200, headers=None
 ):
+    if headers is None:
+        headers = {"Content-Type": "application/json"}
+
+    payload = {"message": message, "status": "ok"}
+    if data:
+        # If caller passed a dict, merge into payload. Otherwise attach under 'data'.
+        if isinstance(data, dict):
+            payload.update(data)
+        else:
+            payload["data"] = data
+
     return make_response(
-        jsonify({"message": message, "status": "ok"}), status_code, headers
+        jsonify(payload), status_code, headers
     )
 
 
 def build_response_with_data(
-    data, status_code=200, headers={"Content-Type": "application/json"}
+    data, status_code=200, headers=None
 ):
+    if headers is None:
+        headers = {"Content-Type": "application/json"}
+
     if isinstance(data, dict):
         return make_response(jsonify(data), status_code, headers)
     return make_response(data, status_code, headers)
 
 
 def build_response_raw(
-    message: str, status_code=200, headers={"Content-Type": "application/json"}
+    message: str, status_code=200, headers=None
 ):
+    if headers is None:
+        headers = {"Content-Type": "application/json"}
     return make_response(message, status_code, headers)
 
 
 def build_error_raw(
-    message: str, status_code=400, headers={"Content-Type": "application/json"}
+    message: str, status_code=400, headers=None
 ):
+    if headers is None:
+        headers = {"Content-Type": "application/json"}
     return make_response(message, status_code, headers)

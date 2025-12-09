@@ -49,7 +49,7 @@ def ow_authorize(pass_user_data=False, kwargs_field_name="ow-auth-user"):
 
             ow_auth = OpenwhiskAuthorize()
             try:
-                user_data = ow_auth.login(request.headers.get("authorization"))
+                user_data = ow_auth.login(request.headers["authorization"])
 
                 if not user_data:
                     return res_builder.build_error_message(

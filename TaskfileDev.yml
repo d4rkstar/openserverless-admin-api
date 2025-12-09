@@ -52,7 +52,25 @@ tasks:
       - sed -i '' 's/^KUBERNETES_SERVICE_PORT=.*/KUBERNETES_SERVICE_PORT={{.KUB_SERVICE_PORT}}/' .env
       - sed -i '' 's/^REGISTRY_PASS=.*/REGISTRY_PASS={{.REGISTRY_PASS}}/' .env
       - sed -i '' 's/^COUCHDB_ADMIN_PASSWORD=.*/COUCHDB_ADMIN_PASSWORD={{.COUCHDB_PASS}}/' .env
+      - task: setup-secret
   
+  setup-secret:
+    desc: "Create docker-registry secret for development using credentials from .env"
+    dotenv: ['.env']
+    cmds:
+      - kubectl delete secret registry-pull-secret-dev -n nuvolaris 2>/dev/null || true
+      - kubectl create secret docker-registry registry-pull-secret-dev -n nuvolaris --docker-server=${REGISTRY_HOST} --docker-username=${REGISTRY_USER} --docker-password=${REGISTRY_PASS}
+      - echo "Secret 'registry-pull-secret-dev' created successfully in namespace 'nuvolaris'"
+      - ops env add REGISTRY_SECRET=registry-pull-secret-dev
+      - echo "Environment variable REGISTRY_SECRET set to 'registry-pull-secret-dev'"
+      - |
+        if ops env list | rg REGISTRY_SECRET > /dev/null 2>&1; then
+          echo "✓ Verified: REGISTRY_SECRET is configured"
+          ops env list | rg REGISTRY_SECRET
+        else
+          echo "⚠ Warning: REGISTRY_SECRET not found in ops env list"
+        fi
+
   run:
     desc: |
       Run the admin api locally, using configuration from .env file
