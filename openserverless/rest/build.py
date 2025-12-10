@@ -62,21 +62,48 @@ def build():
         required: true
         schema:
           type: object
+          required:
+            - source
+            - target
+            - kind
           properties:
             source:
               type: string
-              description: Source for the build
+              description: Source image for the build (e.g., ghcr.io/nuvolaris/openserverless-runtime-python:3.12)
+              example: "ghcr.io/nuvolaris/openserverless-runtime-python:3.12"
             target:
               type: string
-              description: Target for the build
+              description: Target image name in format username:tag (must match authenticated user)
+              example: "myuser:custom-tag"
             kind:
               type: string
-              description: Kind of the build
+              description: Runtime kind (python, nodejs, java, php, go, ruby, dotnet)
+              enum: [python, nodejs, java, php, go, ruby, dotnet]
+              example: "python"
+            file:
+              type: string
+              description: Base64-encoded requirements file (optional, e.g., requirements.txt for Python)
+              example: "cmVxdWVzdHM9PTIuMzEuMA=="
     responses:
       200:
         description: Build process initiated successfully.
         schema:
-          $ref: '#/definitions/Message'
+          type: object
+          properties:
+            message:
+              type: string
+              example: "Build process initiated successfully. Job: build-myuser-abc123"
+            data:
+              type: object
+              properties:
+                id:
+                  type: string
+                  description: Unique build ID
+                  example: "550e8400-e29b-41d4-a716-446655440000"
+                job_name:
+                  type: string
+                  description: Kubernetes job name
+                  example: "build-myuser-abc123"
       400:
         description: Bad Request. Missing or invalid parameters.
         schema:
@@ -168,46 +195,38 @@ def clean():
                 default: 24
               
     responses:
-      '200':
+      200:
         description: Successfully cleaned up old build jobs.
-        content:
-          application/json:
-            schema:
-              type: object
-              properties:
-                message:
-                  type: string
-                  example: Cleaned up 5 jobs successfully.
-      '400':
+        schema:
+          type: object
+          properties:
+            message:
+              type: string
+              example: "Cleaned up 5 jobs successfully."
+      400:
         description: Bad request. No JSON payload provided for cleanup.
-        content:
-          application/json:
-            schema:
-              type: object
-              properties:
-                error:
-                  type: string
-                  example: No JSON payload provided for cleanup.
-      '401':
+        schema:
+          type: object
+          properties:
+            error:
+              type: string
+              example: "No JSON payload provided for cleanup."
+      401:
         description: Unauthorized. User environment not found.
-        content:
-          application/json:
-            schema:
-              type: object
-              properties:
-                error:
-                  type: string
-                  example: User environment not found
-      '500':
+        schema:
+          type: object
+          properties:
+            error:
+              type: string
+              example: "User environment not found"
+      500:
         description: Internal server error. Failed to clean up old build jobs.
-        content:
-          application/json:
-            schema:
-              type: object
-              properties:
-                error:
-                  type: string
-                  example: Failed to clean up old build jobs.
+        schema:
+          type: object
+          properties:
+            error:
+              type: string
+              example: "Failed to clean up old build jobs."
     """
 
     auth_result = authorize()
