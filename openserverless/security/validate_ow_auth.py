@@ -43,7 +43,7 @@ def validate_ow_auth(ow_subject="whisk-system"):
 
             ow_auth = OpenwhiskAuthorize()
             try:
-                subject = ow_auth.subject_login(request.headers.get("authorization"))
+                subject = ow_auth.subject_login(request.headers["authorization"])
                 if ow_subject not in subject["subject"]:
                     return res_builder.build_error_message(
                         f"Invalid authorization for subject {ow_subject}. Access denied.",

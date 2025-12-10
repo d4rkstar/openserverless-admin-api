@@ -1,3 +1,4 @@
+#!/bin/bash
 # Licensed to the Apache Software Foundation (ASF) under one
 # or more contributor license agreements.  See the NOTICE file
 # distributed with this work for additional information
@@ -15,23 +16,9 @@
 # specific language governing permissions and limitations
 # under the License.
 #
-header:
-  license:
-    spdx-id: Apache-2.0
-    copyright-owner: Apache Software Foundation
-
-  paths-ignore:
-    - '**/*.sample'
-    - 'env.example'
-    - '.git-hooks/pre-commit'
-    - '**/_*'    
-    - 'LICENSE'
-    - 'NOTICE'
-    - 'DISCLAIMER'
-    - 'deploy/samples/*'
-    - '**/*.json'
-    - '**/*.service'
-    - '**/*.txt'
-    - 'uv.lock'
-    - '.env.example'
-    - '.vscode/*.json'
+echo "Testing from VSCode task..."
+echo "PATH: $PATH"
+echo "SHELL: $SHELL"
+echo "PWD: $PWD"
+which kubectl
+kubectl version --client --short 2>/dev/null || kubectl version --client 2>/dev/null

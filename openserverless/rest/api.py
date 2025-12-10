@@ -24,8 +24,10 @@ def info():
     """
     Info Endpoint
     ---
-    securityDefinitions:      
-        openwhiskBasicAuth:          
+    securityDefinitions:
+        openwhiskBasicAuth:
+            type: basic
+            description: OpenWhisk basic authentication using UUID:KEY format
     definitions:
       Message:
         type: object
@@ -93,15 +95,18 @@ def info():
 @app.route('/system/config')
 def config():
     """
-    Info Endpoint
+    Config Endpoint
     ---
     tags:
       - Config
+    summary: Get API configuration data
+    description: Returns basic configuration data used by this API
+    operationId: getConfig
     responses:
       200:
-        description: Config Endpoint Returns Basic Configuration Data used by this API.
+        description: Configuration data retrieved successfully
         schema:
-          $ref: '#/definitions/Message'     
+          $ref: '#/definitions/MessageData'
     """
     config = {
         

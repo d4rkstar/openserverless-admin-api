@@ -5,8 +5,10 @@
             "name": "Debug OpenServerless Admin API",
             "type": "debugpy",
             "request": "launch",
-            "module": "openserverless"            
+            "module": "openserverless",
+            "preLaunchTask": "Start Port Forwards",
+            "postDebugTask": "Stop Port Forwards"
         }
-        
+
     ]
 }

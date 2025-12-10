@@ -15,6 +15,7 @@
 # specific language governing permissions and limitations
 # under the License.
 #
+import os
 from openserverless import app
 from http import HTTPStatus
 from flask import request, Response
@@ -61,21 +62,48 @@ def build():
         required: true
         schema:
           type: object
+          required:
+            - source
+            - target
+            - kind
           properties:
             source:
               type: string
-              description: Source for the build
+              description: Source image for the build (e.g., ghcr.io/nuvolaris/openserverless-runtime-python:3.12)
+              example: "ghcr.io/nuvolaris/openserverless-runtime-python:3.12"
             target:
               type: string
-              description: Target for the build
+              description: Target image name in format username:tag (must match authenticated user)
+              example: "myuser:custom-tag"
             kind:
               type: string
-              description: Kind of the build
+              description: Runtime kind (python, nodejs, java, php, go, ruby, dotnet)
+              enum: [python, nodejs, java, php, go, ruby, dotnet]
+              example: "python"
+            file:
+              type: string
+              description: Base64-encoded requirements file (optional, e.g., requirements.txt for Python)
+              example: "cmVxdWVzdHM9PTIuMzEuMA=="
     responses:
       200:
         description: Build process initiated successfully.
         schema:
-          $ref: '#/definitions/Message'
+          type: object
+          properties:
+            message:
+              type: string
+              example: "Build process initiated successfully. Job: build-myuser-abc123"
+            data:
+              type: object
+              properties:
+                id:
+                  type: string
+                  description: Unique build ID
+                  example: "550e8400-e29b-41d4-a716-446655440000"
+                job_name:
+                  type: string
+                  description: Kubernetes job name
+                  example: "build-myuser-abc123"
       400:
         description: Bad Request. Missing or invalid parameters.
         schema:
@@ -92,12 +120,14 @@ def build():
     auth_result = authorize()
     if isinstance(auth_result, Response):
       return auth_result
-    
+
     env = env_to_dict(auth_result)
     user_env = env_to_dict(auth_result,"userenv")
     for key in user_env:
         env[key]=user_env[key]
-    if env is None:
+
+    # Check if env is empty (env_to_dict returns dict, never None)
+    if not env:
         return res_builder.build_error_message("User environment not found", status_code=HTTPStatus.UNAUTHORIZED)
 
     if (request.json is None):
@@ -116,18 +146,24 @@ def build():
     wsk_user_name = auth_result.get('login','').lower()
     target = json_data.get('target')
     target_user = str(target).split(':')[0]
-    #if wsk_user_name != target_user:
-    #    return res_builder.build_error_message("Invalid target for the build.", status_code=HTTPStatus.BAD_REQUEST)
+
+    # Strict user check is enabled by default for security
+    strict_user_check = os.environ.get("STRICT_USER_CHECK", "true").lower() not in ("false", "0", "no", "off")
+    if strict_user_check and (wsk_user_name != target_user):
+        return res_builder.build_error_message("Invalid target for the build.", status_code=HTTPStatus.BAD_REQUEST)
 
     env['wsk_user_name'] = wsk_user_name
     build_service = BuildService(user_env=env)
     build_service.init(build_config=json_data)
-    build_success = build_service.build(json_data.get('target'))  # Replace with your desired image name
-    
-    if not build_success:
-        return res_builder.build_error_message("Build process failed.", status_code=HTTPStatus.INTERNAL_SERVER_ERROR)
-    
-    return res_builder.build_response_message("Build process initiated successfully.", status_code=HTTPStatus.OK)
+    success, msg = build_service.build(json_data.get('target')) 
+
+    if not success:
+      return res_builder.build_error_message(msg or "Build process failed.", status_code=HTTPStatus.INTERNAL_SERVER_ERROR)
+
+    additional_data = {"id": build_service.id, "job_name": build_service.job_name }
+    return res_builder.build_response_message(f"Build process initiated successfully. Job: {msg}", 
+                                              data=additional_data,
+                                              status_code=HTTPStatus.OK)
 
 @app.route('/system/api/v1/build/cleanup', methods=['POST'])    
 def clean():
@@ -159,54 +195,47 @@ def clean():
                 default: 24
               
     responses:
-      '200':
+      200:
         description: Successfully cleaned up old build jobs.
-        content:
-          application/json:
-            schema:
-              type: object
-              properties:
-                message:
-                  type: string
-                  example: Cleaned up 5 jobs successfully.
-      '400':
+        schema:
+          type: object
+          properties:
+            message:
+              type: string
+              example: "Cleaned up 5 jobs successfully."
+      400:
         description: Bad request. No JSON payload provided for cleanup.
-        content:
-          application/json:
-            schema:
-              type: object
-              properties:
-                error:
-                  type: string
-                  example: No JSON payload provided for cleanup.
-      '401':
+        schema:
+          type: object
+          properties:
+            error:
+              type: string
+              example: "No JSON payload provided for cleanup."
+      401:
         description: Unauthorized. User environment not found.
-        content:
-          application/json:
-            schema:
-              type: object
-              properties:
-                error:
-                  type: string
-                  example: User environment not found
-      '500':
+        schema:
+          type: object
+          properties:
+            error:
+              type: string
+              example: "User environment not found"
+      500:
         description: Internal server error. Failed to clean up old build jobs.
-        content:
-          application/json:
-            schema:
-              type: object
-              properties:
-                error:
-                  type: string
-                  example: Failed to clean up old build jobs.
+        schema:
+          type: object
+          properties:
+            error:
+              type: string
+              example: "Failed to clean up old build jobs."
     """
 
     auth_result = authorize()
     if isinstance(auth_result, Response):
       return auth_result
-    
+
     env = env_to_dict(auth_result)
-    if env is None:
+    # Check if env is empty (env_to_dict returns dict, never None)
+    if not env:
         return res_builder.build_error_message("User environment not found", status_code=HTTPStatus.UNAUTHORIZED)
     
     if (request.json is None):

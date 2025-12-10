@@ -16,7 +16,6 @@
 # under the License.
 #
 import shutil
-import time
 from openserverless.common.kube_api_client import KubeApiClient
 import os
 import uuid
@@ -25,6 +24,7 @@ from datetime import datetime, timezone, timedelta
 from types import SimpleNamespace
 import random
 import string
+import binascii
 
 JOB_NAME = "build"
 CM_NAME = "cm"
@@ -61,9 +61,9 @@ class BuildService:
         logging.info(f"Using registry host: {self.registry_host}")
 
         # define registry auth
-        self.registry_auth = self.get_registry_auth()
+        #self.registry_auth = self.get_registry_auth()
         self.custom_registry_auth = False
-        logging.info(f"Using registry auth: {self.registry_auth}")
+        #logging.info(f"Using registry auth: {self.registry_auth}")
     
     def init(self, build_config: dict):
         """
@@ -96,24 +96,34 @@ class BuildService:
 
     def get_registry_host(self) -> str:
         """
-        Retrieve the registry host 
-        - firstly, check if the user environment has a registry host set
-        - otherwise retrieve the OpenServerless config map 
+        Retrieve the registry host
+        - firstly, use local environment
+        - then, check if the user environment has a registry host set
+        - otherwise retrieve the OpenServerless config map
         - if not present use a default value
-        """        
-        # if customized by the user
-        if (self.user_env.get('REGISTRY_HOST') is not None):
-            return self.user_env.get('REGISTRY_HOST')
+        """
 
-        # the default                
-        registry_host = 'nuvolaris-registry-svc:5000'
+        # Check environment variable (only use if not empty)
+        registry_host = os.environ.get("REGISTRY_HOST", "").strip()
+        if registry_host:
+            return registry_host
+
+        # Check user environment (only use if not empty)
+        user_registry_host = self.user_env.get('REGISTRY_HOST', "").strip()
+        if user_registry_host:
+            return user_registry_host
+
+        # Try to get from OpenServerless config map
+        registry_host = 'nuvolaris-registry-svc:5000'  # Default fallback
         ops_config_map = self.kube_client.get_config_map('config')
         if ops_config_map is not None:
             if 'annotations' in ops_config_map.get('metadata', {}):
                 annotations = ops_config_map['metadata']['annotations']
                 if 'registry_host' in annotations:
-                    registry_host = annotations['registry_host']
-        
+                    config_registry_host = annotations.get('registry_host', '').strip()
+                    if config_registry_host:
+                        registry_host = config_registry_host
+
         return registry_host
     
     def get_registry_auth(self) -> str:
@@ -121,7 +131,7 @@ class BuildService:
         Get the name of the registry auth secret. If the user environment has a registry auth set, use it.        
         """
         if (self.user_env.get('REGISTRY_SECRET') is not None):
-            custom_credentials = self.user_env.get('REGISTRY_SECRET')
+            custom_credentials = self.user_env.get('REGISTRY_SECRET',"")
             # if not ':' it means that the user is referencing an already created custom secret
             if ":" not in custom_credentials:
                 return custom_credentials
@@ -136,10 +146,12 @@ class BuildService:
                 # is custom only when is not equal to the default
                 if self.registry_auth != "registry-pull-secret":
                     self.custom_registry_auth = True
-
-            return self.user_env.get('REGISTRY_SECRET')
+                return self.registry_auth
+            else:
+                logging.error(f"Failed to create registry secret for custom credentials")
+                return 'registry-pull-secret-int'
         
-        return 'registry-pull-secret-int'
+        return 'registry-pull-secret'
 
     def create_docker_file(self, requirements=None) -> str:
         """
@@ -181,10 +193,15 @@ class BuildService:
         else:
             raise ValueError(f"Unsupported kind: {kind}")
 
-    def build(self, image_name: str) -> str:
-        """ 
+    def build(self, image_name: str) -> tuple[bool, str]:
+        """
         Build the Docker image using the provided build configuration.
         The build configuration should include the source, target, and kind.
+
+        Returns:
+            tuple[bool, str]: (success, message). On success `success` is True
+            and `message` contains the created job name. On failure `success`
+            is False and `message` contains an error description.
         """
         import tempfile
         import base64
@@ -192,11 +209,15 @@ class BuildService:
         # define registry host
         self.registry_host = self.get_registry_host()
         if self.registry_host is None:
-            return None
+            return (False, "No registry host configured")
         logging.info(f"Using registry host: {self.registry_host}")
 
         # define registry auth
         self.registry_auth = self.get_registry_auth()
+
+        secret = self.kube_client.get_secret(self.registry_auth)
+        if secret is None:
+            return (False, f"Secret {self.registry_auth} is not configured!")
 
         logging.info(f"Using registry auth: {self.registry_auth}")
 
@@ -210,15 +231,33 @@ class BuildService:
             logging.info("Decoding the requirements file from base64")
             # decode base64 self.build_config.get('file')
             try:
-                requirements = base64.b64decode(self.build_config.get('file')).decode('utf-8')
+                file_data = self.build_config.get('file', "")
+
+                # Validate base64 data size (10MB limit for encoded data)
+                if len(file_data) > 10_000_000:
+                    return (False, "Requirements file too large (max 10MB base64-encoded)")
+
+                # Decode base64 and UTF-8
+                requirements = base64.b64decode(file_data).decode('utf-8')
+
+                # Validate decoded size (5MB limit for decoded text)
+                if len(requirements) > 5_000_000:
+                    return (False, "Decoded requirements file too large (max 5MB)")
+
                 requirements_file = self.get_requirements_file_from_kind()
-                
-                with open(os.path.join(tmpdirname,requirements_file), 'w') as f:
+
+                with open(os.path.join(tmpdirname, requirements_file), 'w') as f:
                     f.write(requirements)
-                
-            except Exception as e:
-                logging.error(f"Failed to decode the requirements file: {e}")
-                return None    
+
+            except binascii.Error as e:
+                logging.error(f"Invalid base64 encoding: {e}")
+                return (False, "Requirements file must be valid base64-encoded data")
+            except UnicodeDecodeError as e:
+                logging.error(f"Invalid UTF-8 encoding: {e}")
+                return (False, "Requirements file must be valid UTF-8 text")
+            except IOError as e:
+                logging.error(f"Failed to write requirements file: {e}")
+                return (False, f"Failed to write requirements file: {e}")
         
         dockerfile_path = os.path.join(tmpdirname, "Dockerfile")
         logging.info(f"Creating Dockerfile at: {dockerfile_path}")
@@ -227,7 +266,7 @@ class BuildService:
         
         # check if the directory contains a Dockerfile and is not empty.
         if not self.check_build_dir(tmpdirname):
-            return None
+            return (False, "Build directory invalid or missing Dockerfile")
 
         # Create a ConfigMap for the build context
         logging.info(f"Creating ConfigMap {self.cm} with build context")
@@ -240,29 +279,67 @@ class BuildService:
         shutil.rmtree(tmpdirname)
 
         if not cm:
-            return None
+            return (False, "Failed to create ConfigMap for build context")
 
         logging.info(f"ConfigMap {self.cm} created successfully")
         job_template = self.create_build_job(image_name)
+
         job = self.kube_client.post_job(job_template)
         if not job:
             logging.error(f"Failed to create job {self.job_name}")
-            return None
-        
-        time.sleep(3)
+            # Cleanup resources if job creation failed
+            self._cleanup_build_resources()
+            return (False, f"Failed to create job {self.job_name}")
+
+        logging.info(f"Job {self.job_name} created successfully")
+
+        # Wait for the copy-build-context init container to complete before cleaning up resources
+        # The init container needs to copy the ConfigMap contents to the workspace volume
+        # Only after it completes (successfully or with error) can we safely delete the ConfigMap and Secret
+        logging.info(f"Waiting for init container 'copy-build-context' to complete for job {self.job_name}")
+        init_container_completed = self.kube_client.wait_for_init_container_completion(
+            job_name=self.job_name,
+            init_container_name="copy-build-context",
+            namespace="nuvolaris",
+            timeout_seconds=120  # 2 minutes should be enough for copying files
+        )
+
+        if init_container_completed:
+            logging.info(f"Init container completed for job {self.job_name}, cleaning up resources")
+            self._cleanup_build_resources()
+        else:
+            logging.warning(f"Init container did not complete within timeout for job {self.job_name}, resources will not be cleaned up automatically")
+            # Note: Resources are not cleaned up if init container doesn't complete
+            # This prevents race conditions where the ConfigMap is deleted while the init container still needs it
+
+        # Success: return True and the job name (string) so callers get a simple identifier
+        return (True, self.job_name)
+    
+    def _cleanup_build_resources(self):
+        """
+        Clean up temporary resources (ConfigMap and custom registry Secret) created for the build.
+        This should only be called after the init container has completed copying the build context.
+        """
+        # Cleanup ConfigMap - safe to delete after init container copies it
         if not self.kube_client.delete_config_map(cm_name=self.cm):
             logging.error(f"Failed to delete ConfigMap {self.cm}")
+        else:
+            logging.info(f"Successfully deleted ConfigMap {self.cm}")
 
-
+        # Cleanup custom registry secret if one was created
         if self.custom_registry_auth:
             if not self.kube_client.delete_secret(secret_name=self.registry_auth):
-                logging.error(f"Failed to delete Secret {self.custom_registry_auth}")
+                logging.error(f"Failed to delete Secret {self.registry_auth}")
+            else:
+                logging.info(f"Successfully deleted Secret {self.registry_auth}")
 
-        return job
-    
     def delete_old_build_jobs(self, max_age_hours: int = 24) -> int:
-        name_filter = f"build-{self.user}-" if self.user else "build"        
+        name_filter = f"build-{self.user}-" if self.user else "build"
         jobs = self.kube_client.get_jobs(name_filter=name_filter)
+
+        if jobs is None:
+            logging.error("Failed to retrieve jobs list")
+            return -1
 
         try:
             cutoff_time = datetime.now(timezone.utc) - timedelta(hours=max_age_hours)

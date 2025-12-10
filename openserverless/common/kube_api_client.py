@@ -15,7 +15,7 @@
 # specific language governing permissions and limitations
 # under the License.
 #
-from datetime import time
+import time
 import requests as req
 import json
 import os
@@ -452,9 +452,10 @@ class KubeApiClient:
             logging.error(f"delete_secret {ex}")
             return False
         
-    def get_jobs(self, name_filter: str = None, namespace="nuvolaris"):
+    def get_jobs(self, name_filter: str | None = None, namespace="nuvolaris"):
         """
         Get all Kubernetes jobs in a specific namespace.
+        :param name_filter: Optional filter to match job names.
         :param namespace: Namespace to list jobs from.
         :return: List of jobs or None if failed.
         """
@@ -512,7 +513,7 @@ class KubeApiClient:
             logging.error(f"delete_job {ex}")
             return False
 
-    def post_job(self, job_manifest: json, namespace="nuvolaris"):
+    def post_job(self, job_manifest: dict, namespace="nuvolaris"):
         """
         Create a Kubernetes job.
         :param job_manifest: Dictionary containing the job manifest. 
@@ -602,3 +603,103 @@ class KubeApiClient:
         except Exception as ex:
             logging.error(f"check_job_status {ex}")
             return False
+
+    def get_pod(self, pod_name: str, namespace="nuvolaris"):
+        """
+        Get pod details by name.
+        :param pod_name: Name of the pod.
+        :param namespace: Namespace where the pod is located.
+        :return: Pod object or None if not found.
+        """
+        url = f"{self.host}/api/v1/namespaces/{namespace}/pods/{pod_name}"
+        headers = {"Authorization": self.token}
+
+        try:
+            logging.info(f"GET request to {url}")
+            response = req.get(url, headers=headers, verify=self.ssl_ca_cert)
+
+            if response.status_code == 200:
+                logging.debug(
+                    f"GET to {url} succeeded with {response.status_code}. Body {response.text}"
+                )
+                return json.loads(response.text)
+
+            logging.error(
+                f"GET to {url} failed with {response.status_code}. Body {response.text}"
+            )
+            return None
+        except Exception as ex:
+            logging.error(f"get_pod {ex}")
+            return None
+
+    def wait_for_init_container_completion(self, job_name: str, init_container_name: str, namespace="nuvolaris", timeout_seconds=300):
+        """
+        Wait for a specific init container in a job's pod to complete (successfully or with error).
+        :param job_name: Name of the job.
+        :param init_container_name: Name of the init container to wait for.
+        :param namespace: Namespace where the job is located.
+        :param timeout_seconds: Maximum time to wait in seconds (default: 300 = 5 minutes).
+        :return: True if init container completed (success or error), False if timeout or other failure.
+        """
+        import time
+
+        start_time = time.time()
+        pod_name = None
+
+        logging.info(f"Waiting for init container '{init_container_name}' in job '{job_name}' to complete")
+
+        # First, wait for the pod to be created
+        while time.time() - start_time < timeout_seconds:
+            pod_name = self.get_pod_by_job_name(job_name, namespace)
+            if pod_name:
+                logging.info(f"Found pod '{pod_name}' for job '{job_name}'")
+                break
+            logging.debug(f"Pod for job '{job_name}' not yet created, waiting...")
+            time.sleep(2)
+
+        if not pod_name:
+            logging.error(f"Timeout waiting for pod to be created for job '{job_name}'")
+            return False
+
+        # Now wait for the init container to complete
+        while time.time() - start_time < timeout_seconds:
+            pod = self.get_pod(pod_name, namespace)
+
+            if not pod:
+                logging.error(f"Failed to get pod '{pod_name}'")
+                return False
+
+            # Check init container status
+            init_container_statuses = pod.get("status", {}).get("initContainerStatuses", [])
+
+            for status in init_container_statuses:
+                if status.get("name") == init_container_name:
+                    state = status.get("state", {})
+
+                    # Check if terminated (completed or failed)
+                    if "terminated" in state:
+                        terminated = state["terminated"]
+                        exit_code = terminated.get("exitCode", -1)
+                        reason = terminated.get("reason", "Unknown")
+
+                        if exit_code == 0:
+                            logging.info(f"Init container '{init_container_name}' completed successfully")
+                        else:
+                            logging.warning(f"Init container '{init_container_name}' terminated with exit code {exit_code}, reason: {reason}")
+
+                        return True
+
+                    # Check if still running
+                    if "running" in state:
+                        logging.debug(f"Init container '{init_container_name}' is still running")
+
+                    # Check if waiting
+                    if "waiting" in state:
+                        waiting = state["waiting"]
+                        reason = waiting.get("reason", "Unknown")
+                        logging.debug(f"Init container '{init_container_name}' is waiting, reason: {reason}")
+
+            time.sleep(2)
+
+        logging.error(f"Timeout waiting for init container '{init_container_name}' to complete")
+        return False

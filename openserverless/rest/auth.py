@@ -28,63 +28,42 @@ from flasgger import swag_from
 @ow_authorize(pass_user_data=True)
 def password(login, **kwargs):
     """
-    Update the user password patching the corresponding wsku/<login> entry.
+    Update User Password
     ---
-    tags: 
+    tags:
       - Authentication Api
-    summary: Login an OpenServerless user using login/password payload
-    operationId: patchOpsUser
+    summary: Update user password
+    description: Update the user password by patching the corresponding WhiskUser entry
+    operationId: updateUserPassword
     security:
         - openwhiskBasicAuth: []
     consumes:
         - application/json
-    definitions:
-      LoginUpdateData:
-        type: object
-        properties:
-          password:
-            type: string
-          new_password:
-            type: string
-        required:
-        - password
-        - new_password
-      MessageData:
-        type: object
-        properties:
-          message:
-            type: object
-          status: 
-            type: string
-      Message:
-        type: object
-        properties:
-          message:
-            type: string
-          status: 
-            type: string
     parameters:
     - in: path
       name: login
-      description: The username requiring the password update.
+      description: The username requiring the password update
       required: true
-      schema:
-       type: string   
+      type: string
     - in: body
-      name: User
-      description: the password update payload.
+      name: PasswordUpdate
+      description: Password update payload containing current and new password
       required: true
       schema:
-        $ref: '#/definitions/LoginUpdateData'                                         
+        $ref: '#/definitions/LoginUpdateData'
     responses:
       200:
-        description: Logged in User data
+        description: Password updated successfully
         schema:
           $ref: '#/definitions/MessageData'
-      401:
-        description: Access denied due to wrong credentials.
+      400:
+        description: Bad request. Missing required fields.
         schema:
-          $ref: '#/definitions/Message'         
+          $ref: '#/definitions/Message'
+      401:
+        description: Unauthorized. Invalid credentials or authorization token.
+        schema:
+          $ref: '#/definitions/Message'
     """     
     update_data = request.get_json()
 
@@ -99,30 +78,35 @@ def password(login, **kwargs):
 @app.route('/system/api/v1/auth',methods=['POST'])
 def login():
     """
-    Perform the user Authentication relying on wsku metadata stored into internal CouchDB.
+    User Authentication
     ---
-    tags: 
+    tags:
       - Authentication Api
-    summary: Login an OpenServerless user using login/password payload
-    operationId: loginOpsUser
+    summary: Authenticate user with login credentials
+    description: Perform user authentication using credentials stored in CouchDB metadata
+    operationId: authenticateUser
     consumes:
         - application/json
     parameters:
     - in: body
-      name: User
-      description: The user to login.
+      name: LoginCredentials
+      description: User login credentials
       required: true
       schema:
-        $ref: '#/definitions/LoginData'                                         
+        $ref: '#/definitions/LoginData'
     responses:
       200:
-        description: Logged in User data
+        description: Authentication successful. Returns user data including environment variables and quota.
         schema:
           $ref: '#/definitions/MessageData'
-      401:
-        description: Access denied due to wrong credentials.
+      400:
+        description: Bad request. Missing login or password.
         schema:
-          $ref: '#/definitions/Message'         
+          $ref: '#/definitions/Message'
+      401:
+        description: Unauthorized. Invalid credentials.
+        schema:
+          $ref: '#/definitions/Message'
     """    
     login_data = request.get_json()
     auth_service = AuthService()
